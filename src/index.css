@@ -1,11 +1,26 @@
 @import "tailwindcss";
 
+* {
+  box-sizing: border-box;
+}
+
 html,
 body,
 #root {
   margin: 0;
   padding: 0;
-  min-height: 100%;
   width: 100%;
+  min-height: 100%;
   font-family: Arial, sans-serif;
+}
+
+body {
+  display: block;
+  place-items: unset;
+  min-width: 0;
+  background: #0b1a28;
+}
+
+button {
+  font-family: inherit;
 }
