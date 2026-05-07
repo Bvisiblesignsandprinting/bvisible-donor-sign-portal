@@ -9,6 +9,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_4EijCGn3OePLahvT9CZHbQ_PMkdpoQX";
 const STORAGE_BUCKET = "calendar-files";
 const TABLE_NAME = "calendar_uploads";
 const DATE_COLUMN = "date";
+const DEFAULT_DISPLAY_MODE = "fill";
 
 // JEWISH CALENDAR SETTINGS
 // Keep false for New York / Diaspora. Set true for Israel.
@@ -178,6 +179,7 @@ function getSetupSql() {
   file_name text not null,
   file_url text not null,
   file_type text,
+  display_mode text default 'fill',
   created_at timestamptz default now()
 );`;
 }
@@ -187,7 +189,7 @@ function makeSchemaError(details) {
 }
 
 async function supabaseSelectUploads(startDate, endDate) {
-  const url = `${SUPABASE_URL}/rest/v1/${TABLE_NAME}?select=${DATE_COLUMN},file_name,file_url,file_type&${DATE_COLUMN}=gte.${startDate}&${DATE_COLUMN}=lte.${endDate}`;
+  const url = `${SUPABASE_URL}/rest/v1/${TABLE_NAME}?select=${DATE_COLUMN},file_name,file_url,file_type,display_mode&${DATE_COLUMN}=gte.${startDate}&${DATE_COLUMN}=lte.${endDate}`;
   const response = await fetch(url, {
     headers: supabaseHeaders({ Accept: "application/json" })
   });
@@ -204,7 +206,7 @@ async function supabaseSelectUploads(startDate, endDate) {
 }
 
 async function supabaseSelectToday(today) {
-  const url = `${SUPABASE_URL}/rest/v1/${TABLE_NAME}?select=${DATE_COLUMN},file_name,file_url,file_type&${DATE_COLUMN}=eq.${today}&limit=1`;
+  const url = `${SUPABASE_URL}/rest/v1/${TABLE_NAME}?select=${DATE_COLUMN},file_name,file_url,file_type,display_mode&${DATE_COLUMN}=eq.${today}&limit=1`;
   const response = await fetch(url, {
     headers: supabaseHeaders({ Accept: "application/json" })
   });
@@ -221,7 +223,7 @@ async function supabaseSelectToday(today) {
   return rows[0] || null;
 }
 
-async function supabaseUploadFile(dateKey, file) {
+async function supabaseUploadFile(dateKey, file, displayMode) {
   const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
   const filePath = `${dateKey}/${Date.now()}-${cleanFileName}`;
   const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${filePath}`;
@@ -252,7 +254,8 @@ async function supabaseUploadFile(dateKey, file) {
       [DATE_COLUMN]: dateKey,
       file_name: file.name,
       file_url: publicUrl,
-      file_type: file.type || "application/octet-stream"
+      file_type: file.type || "application/octet-stream",
+      display_mode: displayMode || DEFAULT_DISPLAY_MODE
     })
   });
 
@@ -264,7 +267,8 @@ async function supabaseUploadFile(dateKey, file) {
   return {
     name: file.name,
     url: publicUrl,
-    type: file.type || "application/octet-stream"
+    type: file.type || "application/octet-stream",
+    displayMode: displayMode || DEFAULT_DISPLAY_MODE
   };
 }
 
@@ -281,19 +285,35 @@ async function supabaseDeleteUpload(dateKey) {
   }
 }
 
-function renderPreview(file) {
+function getObjectFitClass(displayMode) {
+  if (displayMode === "stretch") return "object-fill";
+  if (displayMode === "fit") return "object-contain";
+  return "object-cover";
+}
+
+function getDisplayModeLabel(displayMode) {
+  if (displayMode === "stretch") return "Stretch full screen";
+  if (displayMode === "fit") return "Fit full file";
+  return "Fill full screen";
+}
+
+function renderPreview(file, fullScreen = false) {
   if (!file) return null;
 
+  const displayMode = file.displayMode || file.display_mode || DEFAULT_DISPLAY_MODE;
+  const objectFitClass = getObjectFitClass(displayMode);
+  const frameClass = fullScreen ? "w-screen h-screen" : "w-full max-h-[500px]";
+
   if (file.type && file.type.startsWith("image/")) {
-    return <img src={file.url} alt={file.name} className="w-full max-h-[500px] object-contain rounded-xl bg-gray-100" />;
+    return <img src={file.url} alt={file.name} className={`${frameClass} ${objectFitClass} rounded-xl bg-black`} />;
   }
 
   if (file.type && file.type.startsWith("video/")) {
-    return <video src={file.url} className="w-full max-h-[500px] rounded-xl bg-black" controls />;
+    return <video src={file.url} className={`${frameClass} ${objectFitClass} rounded-xl bg-black`} controls={!fullScreen} autoPlay={fullScreen} muted={fullScreen} loop={fullScreen} playsInline />;
   }
 
   if (file.type === "application/pdf") {
-    return <iframe title={file.name} src={file.url} className="w-full h-[500px] rounded-xl border bg-white" />;
+    return <iframe title={file.name} src={file.url} className={`${fullScreen ? "w-screen h-screen" : "w-full h-[500px]"} rounded-xl border bg-white`} />;
   }
 
   return (
@@ -315,6 +335,9 @@ function runBasicTests() {
   console.assert("rgb(251, 176, 60)".startsWith("rgb"), "Brand gold should be valid");
   console.assert("B Visible Donor Sign Portal".includes("Visible"), "Header text should include Visible");
   console.assert(typeof renderPreview === "function", "Preview renderer should exist");
+  console.assert(getObjectFitClass("fit") === "object-contain", "Fit mode should contain");
+  console.assert(getObjectFitClass("fill") === "object-cover", "Fill mode should cover");
+  console.assert(getObjectFitClass("stretch") === "object-fill", "Stretch mode should fill");
   console.assert(typeof readErrorText === "function", "Supabase error reader should exist");
   console.assert(DATE_COLUMN === "date", "Date column should be date");
   console.assert(getSetupSql().includes("file_url"), "Setup SQL should include file_url");
@@ -344,6 +367,7 @@ export default function SimpleCalendarUpload() {
   const [jewishEvents, setJewishEvents] = useState({});
   const [jewishEventsStatus, setJewishEventsStatus] = useState("loading");
   const [message, setMessage] = useState("");
+  const [displayMode, setDisplayMode] = useState(DEFAULT_DISPLAY_MODE);
 
   const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const isScreenMode = searchParams.get("screen") === "player";
@@ -368,7 +392,8 @@ export default function SimpleCalendarUpload() {
         mapped[item[DATE_COLUMN]] = {
           name: item.file_name,
           url: item.file_url,
-          type: item.file_type
+          type: item.file_type,
+          displayMode: item.display_mode || DEFAULT_DISPLAY_MODE
         };
       });
 
@@ -409,7 +434,8 @@ export default function SimpleCalendarUpload() {
       setScreenFile(data ? {
         name: data.file_name,
         url: data.file_url,
-        type: data.file_type
+        type: data.file_type,
+        displayMode: data.display_mode || DEFAULT_DISPLAY_MODE
       } : null);
     } catch (error) {
       console.error(error);
@@ -444,7 +470,8 @@ export default function SimpleCalendarUpload() {
           [dateKey]: {
             name: file.name,
             url: fileUrl,
-            type: file.type
+            type: file.type,
+            displayMode
           }
         };
 
@@ -452,7 +479,7 @@ export default function SimpleCalendarUpload() {
         setPreviewFile(nextUploads[dateKey]);
         saveLocalUploads(nextUploads);
       } else {
-        const uploadedFile = await supabaseUploadFile(dateKey, file);
+        const uploadedFile = await supabaseUploadFile(dateKey, file, displayMode);
         setPreviewFile(uploadedFile);
         await loadUploads();
       }
@@ -502,15 +529,9 @@ export default function SimpleCalendarUpload() {
   if (isScreenMode) {
     return (
       <div className="w-screen h-screen bg-black text-white flex items-center justify-center overflow-hidden">
-        {!screenFile && (
-          <div className="text-center p-8">
-            <div className="text-6xl mb-6">▣</div>
-            <h1 className="text-4xl font-bold mb-3">No file scheduled for today</h1>
-            <p className="text-xl opacity-70">Today: {getTodayKey()} • {getJewishDate(new Date())}</p>
-          </div>
-        )}
+        {!screenFile && <div className="w-screen h-screen bg-black" />}
 
-        {screenFile && renderPreview(screenFile)}
+        {screenFile && renderPreview(screenFile, true)}
       </div>
     );
   }
@@ -596,6 +617,7 @@ export default function SimpleCalendarUpload() {
                     onClick={() => {
                       setSelectedDate(date);
                       setPreviewFile(upload || null);
+                      setDisplayMode((upload && upload.displayMode) || DEFAULT_DISPLAY_MODE);
                     }}
                     className={`min-h-32 rounded-2xl border p-3 text-left transition bg-white hover:bg-blue-50 hover:border-blue-300 ${
                       isSelected ? "border-blue-600 ring-2 ring-blue-200" : "border-gray-200"
@@ -679,6 +701,22 @@ export default function SimpleCalendarUpload() {
                     </div>
                   </div>
                 )}
+
+                <div className="rounded-2xl border bg-white p-4" style={{ borderColor: "rgb(251, 176, 60)" }}>
+                  <label className="block text-sm font-bold mb-2" style={{ color: "rgb(32, 73, 114)" }}>
+                    Display mode on screen
+                  </label>
+                  <select
+                    value={displayMode}
+                    onChange={(event) => setDisplayMode(event.target.value)}
+                    className="w-full rounded-xl border border-gray-300 bg-white p-3 text-sm font-semibold"
+                  >
+                    <option value="fit">Fit — show full file, may leave side bars</option>
+                    <option value="fill">Fill — full screen, may crop edges</option>
+                    <option value="stretch">Stretch — full screen, may distort slightly</option>
+                  </select>
+                  <p className="mt-2 text-xs text-gray-600">Current: {getDisplayModeLabel(displayMode)}</p>
+                </div>
 
                 <label className="flex items-center justify-center gap-3 border-2 border-dashed rounded-2xl p-8 bg-white hover:bg-orange-50 cursor-pointer" style={{ borderColor: "rgb(245, 132, 65)" }}>
                   <span className="text-2xl">↑</span>
